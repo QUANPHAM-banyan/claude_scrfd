@@ -7,7 +7,7 @@ from PIL import Image
 from torch.utils.data import Dataset
 
 
-class PlateDataset(Dataset):
+class TrafficDataset(Dataset):
     """Simple multi-class dataset for traffic detection.
 
     Expected JSON format:
@@ -96,7 +96,7 @@ class PlateDataset(Dataset):
         }
 
 
-def collate_plate_batch(batch: Sequence[Dict[str, torch.Tensor]]) -> Dict[str, object]:
+def collate_traffic_batch(batch: Sequence[Dict[str, torch.Tensor]]) -> Dict[str, object]:
     images = torch.stack([item["image"] for item in batch], dim=0)
     return {
         "images": images,
