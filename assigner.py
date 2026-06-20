@@ -8,6 +8,8 @@ try:
 except ImportError:
     from main import distance_to_bbox, make_grid_points
 
+import torch
+import torch.nn.functional as F
 
 @dataclass
 class Assignment:
@@ -155,7 +157,7 @@ def decode_flat_boxes(
     points: [N, 2]
     strides: [N]
     """
-    distances = flat_box_preds * strides[None, :, None]
+    distances = F.softplus(flat_box_preds) * strides[None, :, None]
 
     decoded = []
     for image_distances in distances:
