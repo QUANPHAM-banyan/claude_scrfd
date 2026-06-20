@@ -10,14 +10,14 @@ import matplotlib.pyplot as plt
 
 try:
     from .assigner import build_batch_assignments, decode_flat_boxes, flatten_outputs
-    from .dataset import PlateDataset, collate_plate_batch
+    from .dataset import TrafficDataset, collate_traffic_batch
     from .losses import ciou_loss, reduce_loss_dict, sigmoid_focal_loss
-    from .main import build_scrfd_plate_model
+    from .main import build_scrfd_traffic_model
 except ImportError:
     from assigner import build_batch_assignments, decode_flat_boxes, flatten_outputs
-    from dataset import PlateDataset, collate_plate_batch
+    from dataset import TrafficDataset, collate_traffic_batch
     from losses import ciou_loss, reduce_loss_dict, sigmoid_focal_loss
-    from main import build_scrfd_plate_model
+    from main import build_scrfd_traffic_model
 
 
 def compute_detection_loss(
@@ -102,18 +102,18 @@ def train_detector(args: argparse.Namespace) -> None:
     custom_save_dir = Path("/mnt/f/QuanPM/data7nhan/dataset/models")
     custom_save_dir.mkdir(parents=True, exist_ok=True)
 
-    dataset = PlateDataset(annotation_file=args.annotations, image_root=args.image_root, image_size=args.size)
+    dataset = TrafficDataset(annotation_file=args.annotations, image_root=args.image_root, image_size=args.size)
     loader = DataLoader(
         dataset, 
         batch_size=args.batch_size, 
         shuffle=True, 
-        num_workers=args.workers, # Huy động tối đa CPU đọc ảnh song song
-        collate_fn=collate_plate_batch, 
+        num_workers=args.workers,
+        collate_fn=collate_traffic_batch, 
         drop_last=True,
-        pin_memory=True if device.type == "cuda" else False # Tăng tốc đẩy dữ liệu lên GPU
+        pin_memory=True if device.type == "cuda" else False
     )
 
-    model = build_scrfd_plate_model().to(device)
+    model = build_scrfd_traffic_model().to(device)
     
     optimizer = torch.optim.SGD(
         model.parameters(),
