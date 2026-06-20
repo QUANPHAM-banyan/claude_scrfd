@@ -1,4 +1,4 @@
-"""SCRFD-style license plate detector.
+"""SCRFD-style traffic object detector.
 
 This package is our clean PyTorch rewrite.  It uses the SCRFD pattern from the
 original repository:
@@ -12,14 +12,12 @@ plate detection only needs objectness and bounding boxes.
 from .main import (
     DetectionHead,
     LFPN,
-    LicensePlateDetector,
     MobileNetV1,
-    SCRFDPlateDetector,
-    build_license_plate_model,
-    build_scrfd_plate_model,
+    SCRFDTrafficDetector,
+    build_scrfd_traffic_model,
 )
 # from .process import (
-#     detect_license_plates,
+#     detect_traffic_objects,
 #     draw_detections,
 #     load_model,
 #     preprocess_image,
@@ -30,12 +28,10 @@ from .train import compute_detection_loss
 __all__ = [
     "DetectionHead",
     "LFPN",
-    "LicensePlateDetector",
     "MobileNetV1",
-    "SCRFDPlateDetector",
-    "build_license_plate_model",
-    "build_scrfd_plate_model",
-    # "detect_license_plates",      # Khóa lại trong __all__
+    "SCRFDTrafficDetector",
+    "build_scrfd_traffic_model",
+    # "detect_traffic_objects",
     # "draw_detections",
     # "load_model",
     # "preprocess_image",
