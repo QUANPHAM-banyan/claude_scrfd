@@ -6,9 +6,9 @@ import torch
 from PIL import Image, ImageDraw
 
 try:
-    from .main import build_scrfd_plate_model
+    from .main import build_scrfd_traffic_model
 except ImportError:
-    from main import build_scrfd_plate_model
+    from main import build_scrfd_traffic_model
 
 
 IMAGE_SIZE = 640
@@ -23,7 +23,7 @@ def load_model(
 ) -> torch.nn.Module:
     """Create the multi-class detector and optionally load trained weights."""
     runtime_device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
-    model = build_scrfd_plate_model().to(runtime_device)
+    model = build_scrfd_traffic_model().to(runtime_device)
 
     if checkpoint:
         state = torch.load(checkpoint, map_location=runtime_device)
