@@ -1,4 +1,4 @@
-"""Pure PyTorch SCRFD-style detector for traffic and license plates (7 classes).
+"""Pure PyTorch SCRFD-style detector for traffic objects (7 classes).
 
 Reference pieces from the original repository:
 - ``backbones/mobilenet.py``: compact MobileNetV1 feature extractor.
@@ -59,28 +59,38 @@ class DepthwiseSeparableConv(nn.Sequential):
 class MobileNetV1(nn.Module):
     def __init__(self) -> None:
         super().__init__()
-        self.stage0 = nn.Sequential(
+        # Stem: stride 2
+        self.stem = nn.Sequential(
             ConvBNReLU(3, 16, kernel_size=3, stride=2, padding=1),
             DepthwiseSeparableConv(16, 32, stride=1),
         )
+        # stride 4
         self.stage1 = nn.Sequential(
             DepthwiseSeparableConv(32, 64, stride=2),
             DepthwiseSeparableConv(64, 64, stride=1),
         )
+        # stride 8  -> returned as c1
         self.stage2 = nn.Sequential(
             DepthwiseSeparableConv(64, 128, stride=2),
             DepthwiseSeparableConv(128, 128, stride=1),
         )
+        # stride 16 -> returned as c2
         self.stage3 = nn.Sequential(
             DepthwiseSeparableConv(128, 256, stride=2),
             DepthwiseSeparableConv(256, 256, stride=1),
         )
+        # stride 32 -> returned as c3 (new stage, this was the missing piece)
+        self.stage4 = nn.Sequential(
+            DepthwiseSeparableConv(256, 256, stride=2),
+            DepthwiseSeparableConv(256, 256, stride=1),
+        )
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        c1 = self.stage0(x)
-        c1 = self.stage1(c1)
-        c2 = self.stage2(c1)
-        c3 = self.stage3(c2)
+        x = self.stem(x)
+        x = self.stage1(x)
+        c1 = self.stage2(x)   # stride 8
+        c2 = self.stage3(c1)  # stride 16
+        c3 = self.stage4(c2)  # stride 32
         return c1, c2, c3
 
 
@@ -127,11 +137,11 @@ class DetectionHead(nn.Module):
         return cls_scores, box_preds
 
 
-class SCRFDPlateDetector(nn.Module):
+class SCRFDTrafficDetector(nn.Module):
     def __init__(self, num_classes: int = 7) -> None:
         super().__init__()
         self.backbone = MobileNetV1()
-        self.neck = LFPN(in_channels_list=[64, 128, 256], out_channels=32)
+        self.neck = LFPN(in_channels_list=[128, 256, 256], out_channels=32)
         self.head = DetectionHead(num_classes=num_classes, in_channels=32, anchors_per_level=1)
 
     def forward(self, x: torch.Tensor) -> Tuple[List[torch.Tensor], List[torch.Tensor]]:
@@ -165,7 +175,7 @@ class SCRFDPlateDetector(nn.Module):
                 # Biến đổi scores về dạng: [H * W, num_classes]
                 scores = cls_score[batch_idx].sigmoid().permute(1, 2, 0).reshape(-1, self.head.num_classes)
                 # Biến đổi khoảng cách box về dạng: [H * W, 4]
-                distances = box_pred[batch_idx].permute(1, 2, 0).reshape(-1, 4) * stride
+                distances = F.softplus(box_pred[batch_idx].permute(1, 2, 0).reshape(-1, 4)) * stride
 
                 # Duyệt qua từng class để lọc ngưỡng score
                 for class_idx in range(self.head.num_classes):
@@ -198,16 +208,12 @@ class SCRFDPlateDetector(nn.Module):
         return results
 
 
-LicensePlateDetector = SCRFDPlateDetector
 
 
-def build_scrfd_plate_model() -> SCRFDPlateDetector:
+
+def build_scrfd_traffic_model() -> SCRFDTrafficDetector:
     # Thay đổi mặc định khởi tạo từ 1 lên 7 classes
-    return SCRFDPlateDetector(num_classes=7)
-
-
-def build_license_plate_model() -> SCRFDPlateDetector:
-    return build_scrfd_plate_model()
+    return SCRFDTrafficDetector(num_classes=7)
 
 
 def make_grid_points(height: int, width: int, stride: int, device: torch.device) -> torch.Tensor:
@@ -231,7 +237,7 @@ def main() -> None:
     parser.add_argument("--width", type=int, default=640)
     args = parser.parse_args()
 
-    model = build_scrfd_plate_model()
+    model = build_scrfd_traffic_model()
     dummy = torch.randn(1, 3, args.height, args.width)
     cls_scores, box_preds = model(dummy)
     detections = model.predict(dummy, score_threshold=0.01)
