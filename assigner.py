@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List, Sequence, Tuple
+from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
 import torch
 
@@ -10,6 +10,12 @@ except ImportError:
 
 import torch
 import torch.nn.functional as F
+
+DEFAULT_SIZE_RANGES: Dict[int, Tuple[float, float]] = {
+    8: (0.0, 64.0),
+    16: (64.0, 128.0),
+    32: (128.0, float("inf")),
+}
 
 @dataclass
 class Assignment:
@@ -67,6 +73,7 @@ def assign_single_image(
     gt_labels: torch.Tensor,       # Thêm tham số nhận nhãn thực tế của từng box
     num_classes: int = 7,          # Thêm số lượng class mặc định là 7
     center_radius: float = 2.5,
+    size_ranges: Optional[Mapping[int, Tuple[float, float]]] = None,
 ) -> Assignment:
     num_points = points.shape[0]
 
@@ -112,10 +119,35 @@ def assign_single_image(
     )
     is_inside_centers = delta_centers.min(dim=-1).values > 0.0
 
-    # Kết hợp cả 2 điều kiện: vừa nằm trong box, vừa gần tâm
-    is_candidate = is_inside_boxes & is_inside_centers
+    # 3. Chỉ gán GT cho level phù hợp với kích thước object, tránh object nhỏ
+    # học ở stride quá thô và object lớn học ở stride quá mịn.
+    if size_ranges is None:
+        size_ranges = DEFAULT_SIZE_RANGES
 
-    # 3. Giải quyết chồng lấn (Nếu điểm neo trúng nhiều vật thể, chọn vật thể có diện tích nhỏ nhất)
+    gt_widths = gt_boxes[:, 2] - gt_boxes[:, 0]
+    gt_heights = gt_boxes[:, 3] - gt_boxes[:, 1]
+    gt_sizes = torch.maximum(gt_widths, gt_heights)
+
+    point_min_sizes = torch.empty_like(strides)
+    point_max_sizes = torch.empty_like(strides)
+    for stride_value in strides.unique():
+        stride_key = int(stride_value.item())
+        if stride_key not in size_ranges:
+            raise ValueError(f"Missing size range for stride {stride_key}")
+        min_size, max_size = size_ranges[stride_key]
+        stride_mask = strides == stride_value
+        point_min_sizes[stride_mask] = min_size
+        point_max_sizes[stride_mask] = max_size
+
+    is_inside_size_range = (
+        (gt_sizes[None, :] >= point_min_sizes[:, None])
+        & (gt_sizes[None, :] < point_max_sizes[:, None])
+    )
+
+    # Kết hợp cả 3 điều kiện: nằm trong box, gần tâm, và đúng level kích thước
+    is_candidate = is_inside_boxes & is_inside_centers & is_inside_size_range
+
+    # 4. Giải quyết chồng lấn (Nếu điểm neo trúng nhiều vật thể, chọn vật thể có diện tích nhỏ nhất)
     gt_area = box_area(gt_boxes)
     gt_area = gt_area.repeat(num_points, 1)
     gt_area[~is_candidate] = float("inf")
@@ -173,6 +205,7 @@ def build_batch_assignments(
     strides: Sequence[int],
     num_classes: int = 7,                 # Thêm cấu hình num_classes
     center_radius: float = 2.5,
+    size_ranges: Optional[Mapping[int, Tuple[float, float]]] = None,
 ) -> List[Assignment]:
     """Build anchor assignments across a complete batch."""
     points, point_strides = build_points(cls_scores, strides)
@@ -185,6 +218,7 @@ def build_batch_assignments(
             lbls,                       # Truyền mảng nhãn của từng ảnh vào
             num_classes=num_classes,
             center_radius=center_radius,
+            size_ranges=size_ranges,
         )
         for boxes, lbls in zip(gt_boxes, gt_labels)
     ]
