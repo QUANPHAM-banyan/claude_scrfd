@@ -90,6 +90,13 @@ def assign_single_image(
             box_targets=box_targets,
             positive_mask=positive_mask,
         )
+    if gt_boxes.ndim != 2 or gt_boxes.shape[1] != 4:
+        raise ValueError(f"gt_boxes must have shape [N, 4], got {tuple(gt_boxes.shape)}")
+    if gt_labels.ndim != 1 or gt_labels.shape[0] != gt_boxes.shape[0]:
+        raise ValueError(
+            f"gt_labels must have shape [N] matching gt_boxes, got "
+            f"{tuple(gt_labels.shape)} labels for {tuple(gt_boxes.shape)} boxes"
+        )
 
     # 1. Xác định xem điểm neo (anchor point) có nằm bên trong gt_box hay không
     x_centers = points[:, 0]
