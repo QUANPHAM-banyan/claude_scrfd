@@ -65,6 +65,7 @@ class TrafficDataset(Dataset):
         orig_w, orig_h = image.size
         boxes = torch.tensor(sample.get("boxes", []), dtype=torch.float32).reshape(-1, 4)
         labels = torch.tensor(sample.get("labels", []), dtype=torch.long).reshape(-1)
+        boxes, labels = self._sanitize_boxes(boxes, labels, orig_w, orig_h)
 
         if self.augment:
             image, boxes, labels = self._apply_train_augmentations(image, boxes, labels)
@@ -100,6 +101,7 @@ class TrafficDataset(Dataset):
             # Gờ giới hạn tránh box vượt biên
             boxes[:, [0, 2]] = boxes[:, [0, 2]].clamp(0, self.image_size)
             boxes[:, [1, 3]] = boxes[:, [1, 3]].clamp(0, self.image_size)
+            boxes, labels = self._sanitize_boxes(boxes, labels, self.image_size, self.image_size)
 
         return {
             "image": image_tensor,
@@ -132,6 +134,32 @@ class TrafficDataset(Dataset):
             image = self._color_jitter_image(image)
 
         return image, boxes, labels
+
+    def _sanitize_boxes(
+        self,
+        boxes: torch.Tensor,
+        labels: torch.Tensor,
+        width: int,
+        height: int,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        if boxes.numel() == 0 or labels.numel() == 0:
+            return boxes.reshape(0, 4), labels.reshape(0)
+
+        count = min(boxes.shape[0], labels.shape[0])
+        boxes = boxes[:count].reshape(-1, 4).float()
+        labels = labels[:count].reshape(-1).long()
+
+        x1 = torch.minimum(boxes[:, 0], boxes[:, 2]).clamp(0, width)
+        y1 = torch.minimum(boxes[:, 1], boxes[:, 3]).clamp(0, height)
+        x2 = torch.maximum(boxes[:, 0], boxes[:, 2]).clamp(0, width)
+        y2 = torch.maximum(boxes[:, 1], boxes[:, 3]).clamp(0, height)
+        boxes = torch.stack((x1, y1, x2, y2), dim=1)
+
+        finite = torch.isfinite(boxes).all(dim=1)
+        box_w = boxes[:, 2] - boxes[:, 0]
+        box_h = boxes[:, 3] - boxes[:, 1]
+        keep = finite & (box_w > 2.0) & (box_h > 2.0)
+        return boxes[keep], labels[keep]
 
     def _scale_jitter_image(
         self,
