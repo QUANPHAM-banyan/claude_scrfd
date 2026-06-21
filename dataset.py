@@ -1,9 +1,10 @@
 import json
+import random
 from pathlib import Path
-from typing import Dict, List, Sequence, Tuple
+from typing import Dict, Optional, Sequence, Tuple
 
 import torch
-from PIL import Image
+from PIL import Image, ImageEnhance
 from torch.utils.data import Dataset
 
 
@@ -28,16 +29,27 @@ class TrafficDataset(Dataset):
         annotation_file: str,
         image_root: str = ".",
         image_size: int = 640,
+        indices: Optional[Sequence[int]] = None,
+        augment: bool = False,
+        hflip_prob: float = 0.5,
+        color_jitter: float = 0.2,
+        scale_jitter: float = 0.2,
     ):
         self.annotation_file = Path(annotation_file)
         self.image_root = Path(image_root)
         self.image_size = image_size
+        self.augment = augment
+        self.hflip_prob = hflip_prob
+        self.color_jitter = color_jitter
+        self.scale_jitter = scale_jitter
 
         with self.annotation_file.open("r", encoding="utf-8") as handle:
             self.samples = json.load(handle)
 
         if not isinstance(self.samples, list):
             raise ValueError("annotation_file must contain a list of samples")
+        if indices is not None:
+            self.samples = [self.samples[index] for index in indices]
 
     def __len__(self) -> int:
         return len(self.samples)
@@ -51,11 +63,17 @@ class TrafficDataset(Dataset):
         # 1. Đọc ảnh gốc
         image = Image.open(image_path).convert("RGB")
         orig_w, orig_h = image.size
+        boxes = torch.tensor(sample.get("boxes", []), dtype=torch.float32).reshape(-1, 4)
+        labels = torch.tensor(sample.get("labels", []), dtype=torch.long).reshape(-1)
+
+        if self.augment:
+            image, boxes, labels = self._apply_train_augmentations(image, boxes, labels)
 
         # 2. Tính toán tỷ lệ Letterbox (giữ nguyên aspect ratio)
-        scale = min(self.image_size / orig_w, self.image_size / orig_h)
-        new_w = int(orig_w * scale)
-        new_h = int(orig_h * scale)
+        aug_w, aug_h = image.size
+        scale = min(self.image_size / aug_w, self.image_size / aug_h)
+        new_w = int(aug_w * scale)
+        new_h = int(aug_h * scale)
         
         # Resize ảnh theo tỷ lệ chuẩn
         resized_img = image.resize((new_w, new_h), Image.BILINEAR)
@@ -74,7 +92,6 @@ class TrafficDataset(Dataset):
         image_tensor = image_tensor / 255.0
 
         # 3. Cập nhật lại tọa độ Bounding Box theo Letterbox
-        boxes = torch.tensor(sample.get("boxes", []), dtype=torch.float32).reshape(-1, 4)
         if boxes.numel() > 0:
             # Tọa độ mới = (Tọa độ cũ * scale) + khoảng pad tương ứng
             boxes[:, [0, 2]] = boxes[:, [0, 2]] * scale + pad_x
@@ -84,9 +101,6 @@ class TrafficDataset(Dataset):
             boxes[:, [0, 2]] = boxes[:, [0, 2]].clamp(0, self.image_size)
             boxes[:, [1, 3]] = boxes[:, [1, 3]].clamp(0, self.image_size)
 
-        # 4. Đọc nhãn lớp (labels) tương ứng với từng box
-        labels = torch.tensor(sample.get("labels", []), dtype=torch.long).reshape(-1)
-
         return {
             "image": image_tensor,
             "boxes": boxes,
@@ -94,6 +108,86 @@ class TrafficDataset(Dataset):
             "path": str(image_path),
             "original_size": torch.tensor([orig_w, orig_h], dtype=torch.float32),
         }
+
+    def _apply_train_augmentations(
+        self,
+        image: Image.Image,
+        boxes: torch.Tensor,
+        labels: torch.Tensor,
+    ) -> Tuple[Image.Image, torch.Tensor, torch.Tensor]:
+        width, height = image.size
+
+        if boxes.numel() > 0 and random.random() < self.hflip_prob:
+            image = image.transpose(Image.FLIP_LEFT_RIGHT)
+            x1 = boxes[:, 0].clone()
+            x2 = boxes[:, 2].clone()
+            boxes[:, 0] = width - x2
+            boxes[:, 2] = width - x1
+
+        if self.scale_jitter > 0:
+            scale = random.uniform(1.0 - self.scale_jitter, 1.0 + self.scale_jitter)
+            image, boxes, labels = self._scale_jitter_image(image, boxes, labels, scale)
+
+        if self.color_jitter > 0:
+            image = self._color_jitter_image(image)
+
+        return image, boxes, labels
+
+    def _scale_jitter_image(
+        self,
+        image: Image.Image,
+        boxes: torch.Tensor,
+        labels: torch.Tensor,
+        scale: float,
+    ) -> Tuple[Image.Image, torch.Tensor, torch.Tensor]:
+        width, height = image.size
+        scaled_w = max(1, int(width * scale))
+        scaled_h = max(1, int(height * scale))
+        image = image.resize((scaled_w, scaled_h), Image.BILINEAR)
+
+        if boxes.numel() > 0:
+            boxes = boxes * scale
+
+        if scale >= 1.0:
+            max_left = max(0, scaled_w - width)
+            max_top = max(0, scaled_h - height)
+            left = random.randint(0, max_left) if max_left > 0 else 0
+            top = random.randint(0, max_top) if max_top > 0 else 0
+            image = image.crop((left, top, left + width, top + height))
+            if boxes.numel() > 0:
+                boxes[:, [0, 2]] -= left
+                boxes[:, [1, 3]] -= top
+        else:
+            canvas = Image.new("RGB", (width, height), (128, 128, 128))
+            max_left = width - scaled_w
+            max_top = height - scaled_h
+            left = random.randint(0, max_left) if max_left > 0 else 0
+            top = random.randint(0, max_top) if max_top > 0 else 0
+            canvas.paste(image, (left, top))
+            image = canvas
+            if boxes.numel() > 0:
+                boxes[:, [0, 2]] += left
+                boxes[:, [1, 3]] += top
+
+        if boxes.numel() > 0:
+            boxes[:, [0, 2]] = boxes[:, [0, 2]].clamp(0, width)
+            boxes[:, [1, 3]] = boxes[:, [1, 3]].clamp(0, height)
+            box_w = boxes[:, 2] - boxes[:, 0]
+            box_h = boxes[:, 3] - boxes[:, 1]
+            keep = (box_w > 2.0) & (box_h > 2.0)
+            boxes = boxes[keep]
+            labels = labels[keep]
+
+        return image, boxes, labels
+
+    def _color_jitter_image(self, image: Image.Image) -> Image.Image:
+        min_factor = 1.0 - self.color_jitter
+        max_factor = 1.0 + self.color_jitter
+        enhancers = (ImageEnhance.Brightness, ImageEnhance.Contrast, ImageEnhance.Color)
+        for enhancer_class in enhancers:
+            factor = random.uniform(min_factor, max_factor)
+            image = enhancer_class(image).enhance(factor)
+        return image
 
 
 def collate_traffic_batch(batch: Sequence[Dict[str, torch.Tensor]]) -> Dict[str, object]:
